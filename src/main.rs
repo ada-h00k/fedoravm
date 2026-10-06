@@ -11,7 +11,6 @@ use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -63,7 +62,7 @@ enum CommandKind {
     /// Print host/QEMU/UEFI capabilities relevant to this tool.
     Doctor,
     /// Manage persistent virtiofs shares for an existing VM.
-    Share(ShareCommand),
+    Share(#[command(subcommand)] ShareCommand),
 }
 
 #[derive(Subcommand, Debug)]
