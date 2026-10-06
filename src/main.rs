@@ -766,20 +766,70 @@ fn find_virtiofsd() -> Option<PathBuf> {
 }
 
 fn find_ovmf() -> Result<(PathBuf, PathBuf)> {
-    let candidates = [
-        ("/usr/share/edk2/ovmf/OVMF_CODE.fd", "/usr/share/edk2/ovmf/OVMF_VARS.fd"),
-        ("/usr/share/edk2/ovmf/OVMF_CODE_4M.fd", "/usr/share/edk2/ovmf/OVMF_VARS_4M.fd"),
-        ("/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd"),
+    // OVMF filenames and installation directories differ between distributions.
+    // Modern Arch/CachyOS uses the 4 MiB firmware under /usr/share/edk2/x64.
+    let directories = [
+        "/usr/share/edk2/x64",
+        "/usr/share/edk2-ovmf/x64",
+        "/usr/share/edk2/ovmf",
+        "/usr/share/OVMF",
     ];
-    for (code, vars) in candidates {
-        let c = PathBuf::from(code);
-        let v = PathBuf::from(vars);
-        if c.is_file() && v.is_file() {
-            return Ok((c, v));
+
+    // Prefer non-Secure-Boot firmware. Arch ships a `.secboot.4m.fd` file,
+    // but its Secure Boot database is not pre-enrolled, so it is not useful
+    // as an automatic default for this tool.
+    let filename_pairs = [
+        ("OVMF_CODE.4m.fd", "OVMF_VARS.4m.fd"),
+        ("OVMF_CODE_4M.fd", "OVMF_VARS_4M.fd"),
+        ("OVMF_CODE.fd", "OVMF_VARS.fd"),
+        ("OVMF_CODE_4M.secboot.fd", "OVMF_VARS_4M.fd"),
+        ("OVMF_CODE.secboot.4m.fd", "OVMF_VARS.4m.fd"),
+    ];
+
+    for directory in directories {
+        for (code_name, vars_name) in filename_pairs {
+            let code = Path::new(directory).join(code_name);
+            let vars = Path::new(directory).join(vars_name);
+            if code.is_file() && vars.is_file() {
+                return Ok((code, vars));
+            }
         }
     }
+
+    // Last resort: inspect the standard firmware directories so renamed
+    // 4 MiB variants can still be discovered without requiring a hard-coded
+    // filename. We only accept matching CODE/VARS suffixes.
+    for directory in directories {
+        let dir = Path::new(directory);
+        let Ok(entries) = fs::read_dir(dir) else { continue };
+        let mut code_candidates = Vec::new();
+        let mut vars_candidates = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            if !path.is_file() { continue }
+            if name.starts_with("OVMF_CODE") && name.ends_with(".fd") && !name.contains("secboot") {
+                code_candidates.push(path);
+            } else if name.starts_with("OVMF_VARS") && name.ends_with(".fd") {
+                vars_candidates.push(path);
+            }
+        }
+        code_candidates.sort();
+        vars_candidates.sort();
+        for code in code_candidates {
+            let Some(code_name) = code.file_name().and_then(|n| n.to_str()) else { continue };
+            let suffix = code_name.strip_prefix("OVMF_CODE").unwrap_or("");
+            let expected_vars = format!("OVMF_VARS{suffix}");
+            if let Some(vars) = vars_candidates.iter().find(|p| {
+                p.file_name().and_then(|n| n.to_str()) == Some(expected_vars.as_str())
+            }) {
+                return Ok((code, vars.clone()));
+            }
+        }
+    }
+
     Err(AppError::Message(
-        "OVMF nicht gefunden; installiere edk2-ovmf".into(),
+        "OVMF/EDK2 UEFI firmware not found. Install edk2-ovmf and run `fedoravm doctor` to inspect the detected firmware paths.".into(),
     ))
 }
 
