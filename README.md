@@ -128,9 +128,46 @@ fedoravm start NAME      Start an installed VM
 fedoravm install NAME    Boot the Fedora installer once
 fedoravm stop NAME       Stop a running VM
 fedoravm delete NAME     Delete a VM and its local state
-fedoravm list             List known VMs
-fedoravm doctor           Check host/QEMU/UEFI capabilities
+fedoravm list            List known VMs
+fedoravm doctor          Check host/QEMU/UEFI capabilities
 ```
+
+### Managing shares on an existing VM
+
+Shares are persistent VM settings. They can be added after the VM has already been created; the VM must be stopped while changing them.
+
+Add a host directory:
+
+```bash
+fedoravm share add kde-dev "$HOME/Documents"
+```
+
+List configured shares:
+
+```bash
+fedoravm share list kde-dev
+```
+
+Example output:
+
+```text
+share0: /home/alice/Documents
+share1: /home/alice/projects
+```
+
+Remove a share by its zero-based index:
+
+```bash
+fedoravm share remove kde-dev 0
+```
+
+After adding or removing a share, start the VM normally:
+
+```bash
+fedoravm start kde-dev
+```
+
+Inside Fedora, mount the share using its tag (for example `share0`).
 
 Use a custom data directory with:
 

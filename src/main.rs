@@ -62,6 +62,26 @@ enum CommandKind {
     List,
     /// Print host/QEMU/UEFI capabilities relevant to this tool.
     Doctor,
+    /// Manage persistent virtiofs shares for an existing VM.
+    Share(ShareCommand),
+}
+
+#[derive(Subcommand, Debug)]
+enum ShareCommand {
+    /// Add a host directory to an existing VM.
+    Add {
+        name: String,
+        path: PathBuf,
+    },
+    /// Remove a share by its zero-based index.
+    Remove {
+        name: String,
+        index: usize,
+    },
+    /// List configured shares.
+    List {
+        name: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -146,7 +166,100 @@ fn main() -> Result<()> {
         CommandKind::Delete(args) => delete_vm(&data_dir, &args.name),
         CommandKind::List => list_vms(&data_dir),
         CommandKind::Doctor => doctor(),
+        CommandKind::Share(command) => share_command(&data_dir, command),
     }
+}
+
+
+fn share_command(data_dir: &Path, command: ShareCommand) -> Result<()> {
+    match command {
+        ShareCommand::Add { name, path } => add_share(data_dir, &name, &path),
+        ShareCommand::Remove { name, index } => remove_share(data_dir, &name, index),
+        ShareCommand::List { name } => list_shares(data_dir, &name),
+    }
+}
+
+fn add_share(data_dir: &Path, name: &str, path: &Path) -> Result<()> {
+    let mut config = load_config(data_dir, name)?;
+    let vm_dir = config_dir(&config)?;
+
+    if is_running(&vm_dir)? {
+        return Err(AppError::Message(format!(
+            "VM `{name}` läuft noch; zuerst `fedoravm stop {name}`"
+        )));
+    }
+    if config.shares.len() >= 8 {
+        return Err(AppError::Message(
+            "at most 8 --share arguments are supported".into(),
+        ));
+    }
+
+    let canonical = fs::canonicalize(path).map_err(|e| {
+        AppError::Message(format!(
+            "share path {} is not accessible: {e}",
+            path.display()
+        ))
+    })?;
+    let meta = fs::metadata(&canonical)?;
+    if !meta.is_dir() {
+        return Err(AppError::Message(format!(
+            "share is not a directory: {}",
+            canonical.display()
+        )));
+    }
+
+    if config.shares.iter().any(|p| p == &canonical) {
+        return Err(AppError::Message(format!(
+            "share is already configured: {}",
+            canonical.display()
+        )));
+    }
+
+    config.shares.push(canonical.clone());
+    save_config(&vm_dir, &config)?;
+    println!(
+        "Share {} added to VM `{}` as share{}.",
+        canonical.display(),
+        name,
+        config.shares.len() - 1
+    );
+    Ok(())
+}
+
+fn remove_share(data_dir: &Path, name: &str, index: usize) -> Result<()> {
+    let mut config = load_config(data_dir, name)?;
+    let vm_dir = config_dir(&config)?;
+
+    if is_running(&vm_dir)? {
+        return Err(AppError::Message(format!(
+            "VM `{name}` läuft noch; zuerst `fedoravm stop {name}`"
+        )));
+    }
+
+    if index >= config.shares.len() {
+        return Err(AppError::Message(format!(
+            "share index {index} does not exist; VM `{name}` has {} share(s)",
+            config.shares.len()
+        )));
+    }
+
+    let removed = config.shares.remove(index);
+    save_config(&vm_dir, &config)?;
+    println!("Removed share {} from VM `{}`.", removed.display(), name);
+    Ok(())
+}
+
+fn list_shares(data_dir: &Path, name: &str) -> Result<()> {
+    let config = load_config(data_dir, name)?;
+    if config.shares.is_empty() {
+        println!("VM `{name}` has no shares.");
+        return Ok(());
+    }
+
+    for (index, path) in config.shares.iter().enumerate() {
+        println!("share{index}: {}", path.display());
+    }
+    Ok(())
 }
 
 fn normalize_args<I>(args: I) -> Vec<OsString>
