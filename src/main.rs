@@ -97,6 +97,11 @@ struct CreateArgs {
     /// virtio-gpu host memory window, e.g. 4G.
     #[arg(long = "gpu-memory", default_value = "4G")]
     gpu_memory: String,
+
+    /// Keep Venus/OpenGL enabled while booting the live installer.
+    /// By default the installer uses a 2D virtio-gpu for maximum compatibility.
+    #[arg(long = "installer-3d")]
+    installer_3d: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +111,8 @@ struct VmConfig {
     cpus: u32,
     disk_size: String,
     gpu_memory: String,
+    #[serde(default)]
+    installer_3d: bool,
     disk: PathBuf,
     iso: PathBuf,
     uefi_vars: PathBuf,
@@ -232,6 +239,7 @@ fn create_vm(data_dir: &Path, args: CreateArgs) -> Result<()> {
         cpus: args.cpus,
         disk_size: args.disk,
         gpu_memory: args.gpu_memory,
+        installer_3d: args.installer_3d,
         disk,
         iso: iso_cache,
         uefi_vars,
@@ -379,7 +387,17 @@ fn start_vm(data_dir: &Path, name: &str, installer: bool) -> Result<()> {
 
 fn run_qemu(config: &VmConfig, ovmf_code: &Path, installer: bool) -> Result<()> {
     ensure_kvm_support()?;
-    ensure_venus_support()?;
+
+    // Fedora KDE 44 currently has installer/WebUI issues in the live image
+    // (notably Slitherer/QtWebView). Additionally, QEMU's GTK+EGL path can
+    // spam `eglMakeCurrent failed` on some Wayland hosts. Use a plain 2D
+    // virtio-gpu for the installer by default. The installed VM uses Venus
+    // normally, and --installer-3d can opt back into the accelerated path.
+    let accelerated_installer = installer && config.installer_3d;
+    let use_venus = !installer || accelerated_installer;
+    if use_venus {
+        ensure_venus_support()?;
+    }
 
     let vm_dir = config_dir(config)?;
     fs::create_dir_all(&vm_dir)?;
@@ -399,8 +417,12 @@ fn run_qemu(config: &VmConfig, ovmf_code: &Path, installer: bool) -> Result<()> 
         "-smp".into(), config.cpus.to_string().into(),
         "-pidfile".into(), pid_file.as_os_str().into(),
         "-vga".into(), "none".into(),
-        "-display".into(), "gtk,gl=on".into(),
-        "-device".into(), format!("virtio-gpu-gl,hostmem={},blob=true,venus=true", config.gpu_memory).into(),
+        "-display".into(), if use_venus { "gtk,gl=on".into() } else { "gtk,gl=off".into() },
+        "-device".into(), if use_venus {
+            format!("virtio-gpu-gl,hostmem={},blob=true,venus=true", config.gpu_memory).into()
+        } else {
+            "virtio-gpu".into()
+        },
         "-drive".into(), format!("if=pflash,format=raw,readonly=on,file={}", path_arg(ovmf_code)).into(),
         "-drive".into(), format!("if=pflash,format=raw,file={}", path_arg(&config.uefi_vars)).into(),
         "-drive".into(), format!("if=none,id=disk0,format=qcow2,file={},discard=unmap,cache=writeback", path_arg(&config.disk)).into(),

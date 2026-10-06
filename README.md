@@ -9,7 +9,8 @@ A small Rust CLI for creating and managing Fedora KDE Plasma virtual machines wi
 - automatically discover the current stable Fedora KDE Plasma Desktop release
 - download and SHA-256 verify the official Fedora ISO
 - create a `qcow2` disk and UEFI firmware variables
-- use `virtio-gpu-gl` with `blob=true` and `venus=true` for GPU acceleration
+- use `virtio-gpu-gl` with `blob=true` and `venus=true` for GPU acceleration after installation
+- use a compatibility GPU/display during the live installer by default
 - expose host directories through `virtiofs`
 - create disposable VMs with `--temp` / `-temp`
 - configure RAM, vCPUs, virtual disk size, and GPU host memory
@@ -86,6 +87,16 @@ Create a VM with a host directory shared through virtiofs:
 fedoravm create kde-dev --share "$HOME/projects"
 ```
 
+By default, `create` boots the Fedora live installer with a plain 2D `virtio-gpu` and OpenGL disabled in QEMU. This is intentional: the Fedora 44 KDE live image has a known Anaconda/QtWebView (Slitherer) crash, and QEMU's GTK/EGL path can also emit repeated `eglMakeCurrent failed` warnings on some Wayland hosts. After installation, `fedoravm start NAME` uses the normal Venus-accelerated `virtio-gpu-gl` configuration.
+
+To explicitly keep Venus/OpenGL enabled during the installer, use:
+
+```bash
+fedoravm create kde-dev --installer-3d
+```
+
+This is less compatible and is mainly useful for testing.
+
 Multiple shares are supported:
 
 ```bash
@@ -138,6 +149,28 @@ FEDORAVM_DATA_DIR=/path/to/fedoravm-data fedoravm list
 `fedoravm create` queries the official Fedora KDE download page, determines the current stable release, downloads the corresponding x86_64 ISO, and verifies its SHA-256 hash against the Fedora `CHECKSUM` file before using it.
 
 The ISO is cached below the configured data directory so subsequent VM creations can reuse the same image.
+
+## Live installer compatibility
+
+The official Fedora KDE 44 live image has a documented Anaconda Web UI crash related to QtWebView/Slitherer. Fedora's workaround is to configure Anaconda to use Firefox instead of Slitherer. The issue is tracked as Fedora Bugzilla #2483236 and is marked closed with an erratum, but the Fedora 44 live image can still contain the affected installer stack.
+
+For this reason, `fedoravm` does **not** enable 3D Venus acceleration while the live installer is running unless `--installer-3d` is explicitly requested. The installer therefore starts with:
+
+```text
+-device virtio-gpu
+-display gtk,gl=off
+```
+
+The installed VM is unchanged and uses Venus normally.
+
+If the installer still crashes, the Fedora-side workaround is:
+
+```bash
+sudo sed -i 's/^webui_web_engine = slitherer$/webui_web_engine = firefox/' /etc/anaconda/profile.d/fedora.conf
+liveinst
+```
+
+This workaround is documented by Fedora.
 
 ## GPU acceleration: virtio-gpu Venus
 
