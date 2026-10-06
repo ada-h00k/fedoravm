@@ -62,7 +62,8 @@ enum CommandKind {
     /// Print host/QEMU/UEFI capabilities relevant to this tool.
     Doctor,
     /// Manage persistent virtiofs shares for an existing VM.
-    Share(#[command(subcommand)] ShareCommand),
+    #[command(subcommand)]
+    Share(ShareCommand),
 }
 
 #[derive(Subcommand, Debug)]
