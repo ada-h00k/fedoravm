@@ -167,7 +167,7 @@ fn create_vm(data_dir: &Path, args: CreateArgs) -> Result<()> {
     require_binary("qemu-system-x86_64")?;
     require_binary("qemu-img")?;
     find_virtiofsd().ok_or_else(|| AppError::Message(
-        "virtiofsd not found. On Fedora install the `virtiofsd` package.".into(),
+        "virtiofsd was not found. Install the virtiofsd package and make sure it is in PATH or installed at a standard system path (for Arch/CachyOS: /usr/lib/virtiofsd).".into(),
     ))?;
 
     let name = match args.name {
@@ -631,7 +631,7 @@ fn doctor() -> Result<()> {
     }
 
     println!("\nHost-Hinweis: Venus benötigt einen passenden Vulkan-Treiber auf dem Linux-Host und die in Mesa/QEMU dokumentierten Kernel-/Mesa-Versionen.");
-    println!("Für Fedora 44 ist virtiofsd als Paket verfügbar; OVMF kommt aus edk2-ovmf.");
+    println!("virtiofsd wird distributionsübergreifend gesucht; auf Arch/CachyOS liegt es typischerweise unter /usr/lib/virtiofsd.");
     Ok(())
 }
 
@@ -751,10 +751,15 @@ fn find_binary(name: &str) -> Option<PathBuf> {
 }
 
 fn find_virtiofsd() -> Option<PathBuf> {
+    // Different distributions install virtiofsd in different locations.
+    // Arch Linux (and CachyOS) currently ships it as /usr/lib/virtiofsd.
     [
         "virtiofsd",
+        "/usr/bin/virtiofsd",
+        "/usr/lib/virtiofsd",
         "/usr/libexec/virtiofsd",
         "/usr/lib/qemu/vhost-user/virtiofsd",
+        "/usr/lib/qemu/virtiofsd",
     ]
     .into_iter()
     .find_map(find_binary)

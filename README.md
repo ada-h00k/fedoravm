@@ -34,6 +34,14 @@ On Fedora, the base packages are:
 sudo dnf install qemu-system-x86-core qemu-img virtiofsd edk2-ovmf
 ```
 
+On Arch Linux and Arch-based distributions such as CachyOS, `virtiofsd` is currently installed as `/usr/lib/virtiofsd` rather than `/usr/bin/virtiofsd`. `fedoravm` detects this path automatically.
+
+```bash
+sudo pacman -S qemu-desktop qemu-img virtiofsd edk2-ovmf
+```
+
+When running `virtiofsd` as an unprivileged user, the host must also provide suitable subuid/subgid mappings for the user namespace used by `virtiofsd`.
+
 For Venus acceleration, the host kernel, QEMU, Vulkan implementation, and virglrenderer stack must support the required features. Run:
 
 ```bash
