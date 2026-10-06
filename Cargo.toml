@@ -1,8 +1,8 @@
 [package]
-name = "fedoravm"
-version = "0.1.2"
+name = "vmforge"
+version = "0.2.0"
 edition = "2021"
-description = "Small QEMU/KVM VM manager for the current Fedora KDE Plasma Desktop release"
+description = "Small QEMU/KVM VM manager for Linux distributions"
 license = "AGPL-3.0-or-later"
 
 [dependencies]
