@@ -99,7 +99,11 @@ impl Default for GraphicsMode {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "vmforge", version, about = "Small QEMU/KVM VM manager for Linux distributions")]
+#[command(
+    name = "vmforge",
+    version,
+    about = "Small QEMU/KVM VM manager for Linux distributions"
+)]
 struct Cli {
     #[arg(long, env = "VMFORGE_DATA_DIR", global = true)]
     data_dir: Option<PathBuf>,
@@ -134,19 +138,11 @@ enum CommandKind {
 #[derive(Subcommand, Debug)]
 enum ShareCommand {
     /// Add a host directory to an existing VM.
-    Add {
-        name: String,
-        path: PathBuf,
-    },
+    Add { name: String, path: PathBuf },
     /// Remove a share by its zero-based index.
-    Remove {
-        name: String,
-        index: usize,
-    },
+    Remove { name: String, index: usize },
     /// List configured shares.
-    List {
-        name: String,
-    },
+    List { name: String },
 }
 
 #[derive(Args, Debug)]
@@ -322,9 +318,7 @@ fn add_share(data_dir: &Path, name: &str, path: &Path) -> Result<()> {
         )));
     }
     if config.shares.len() >= 8 {
-        return Err(AppError::Message(
-            "at most 8 shares are supported".into(),
-        ));
+        return Err(AppError::Message("at most 8 shares are supported".into()));
     }
 
     let canonical = fs::canonicalize(path).map_err(|e| {
@@ -448,13 +442,24 @@ fn create_vm(data_dir: &Path, args: CreateArgs) -> Result<()> {
         return Err(AppError::Message("--cpus must be greater than zero".into()));
     }
     if args.shares.len() > 8 {
-        return Err(AppError::Message("at most 8 --share arguments are supported".into()));
+        return Err(AppError::Message(
+            "at most 8 --share arguments are supported".into(),
+        ));
     }
     for share in &args.shares {
-        if !fs::metadata(share).map_err(|e| {
-            AppError::Message(format!("share path {} is not accessible: {e}", share.display()))
-        })?.is_dir() {
-            return Err(AppError::Message(format!("share is not a directory: {}", share.display())));
+        if !fs::metadata(share)
+            .map_err(|e| {
+                AppError::Message(format!(
+                    "share path {} is not accessible: {e}",
+                    share.display()
+                ))
+            })?
+            .is_dir()
+        {
+            return Err(AppError::Message(format!(
+                "share is not a directory: {}",
+                share.display()
+            )));
         }
     }
 
@@ -472,7 +477,10 @@ fn create_vm(data_dir: &Path, args: CreateArgs) -> Result<()> {
     let image = resolve_image(distro)?;
     println!("{} {}", image.distro.display_name(), image.version);
 
-    let iso_cache = data_dir.join("cache").join(distro.slug()).join(&image.filename);
+    let iso_cache = data_dir
+        .join("cache")
+        .join(distro.slug())
+        .join(&image.filename);
     fs::create_dir_all(iso_cache.parent().unwrap())?;
     download_and_verify(&image, &iso_cache)?;
 
@@ -531,11 +539,17 @@ fn resolve_image(distro: Distro) -> Result<OsImage> {
 
 fn resolve_fedora_image() -> Result<OsImage> {
     let client = http_client()?;
-    let html = client.get(FEDORA_KDE_PAGE).send()?.error_for_status()?.text()?;
+    let html = client
+        .get(FEDORA_KDE_PAGE)
+        .send()?
+        .error_for_status()?
+        .text()?;
     let re = Regex::new(r"Fedora-KDE-(\d+)-([0-9][0-9A-Za-z._-]*)-x86_64-CHECKSUM")
         .map_err(|e| AppError::Message(e.to_string()))?;
     let captures = re.captures(&html).ok_or_else(|| {
-        AppError::Message("Fedora KDE download page does not expose a matching x86_64 checksum file".into())
+        AppError::Message(
+            "Fedora KDE download page does not expose a matching x86_64 checksum file".into(),
+        )
     })?;
     let version = captures[1].to_string();
     let respin = captures[2].to_string();
@@ -543,7 +557,11 @@ fn resolve_fedora_image() -> Result<OsImage> {
     let checksum_name = format!("Fedora-KDE-{version}-{respin}-x86_64-CHECKSUM");
     let base = format!("{FEDORA_MIRROR_ROOT}/{version}/KDE/x86_64/iso");
     let checksum_url = format!("{base}/{checksum_name}");
-    let checksum_text = client.get(&checksum_url).send()?.error_for_status()?.text()?;
+    let checksum_text = client
+        .get(&checksum_url)
+        .send()?
+        .error_for_status()?
+        .text()?;
     let sha256 = parse_checksum(&checksum_text, &filename)?;
     let iso_url = format!("{base}/{filename}");
     Ok(OsImage {
@@ -558,17 +576,26 @@ fn resolve_fedora_image() -> Result<OsImage> {
 
 fn resolve_cachyos_image() -> Result<OsImage> {
     let client = http_client()?;
-    let html = client.get(format!("{CACHYOS_ISO_ROOT}/")).send()?.error_for_status()?.text()?;
+    let html = client
+        .get(format!("{CACHYOS_ISO_ROOT}/"))
+        .send()?
+        .error_for_status()?
+        .text()?;
     let re = Regex::new(r">(\d{6})/\s*<").map_err(|e| AppError::Message(e.to_string()))?;
     let version = re
         .captures_iter(&html)
         .map(|c| c[1].to_string())
         .max()
-        .ok_or_else(|| AppError::Message("could not determine the latest CachyOS desktop ISO directory".into()))?;
+        .ok_or_else(|| {
+            AppError::Message("could not determine the latest CachyOS desktop ISO directory".into())
+        })?;
     let dir_url = format!("{CACHYOS_ISO_ROOT}/{version}/");
     let dir_html = client.get(&dir_url).send()?.error_for_status()?.text()?;
-    let iso_re = Regex::new(&format!(r">(cachyos-desktop-linux-{}\.iso)\s*<", regex::escape(&version)))
-        .map_err(|e| AppError::Message(e.to_string()))?;
+    let iso_re = Regex::new(&format!(
+        r">(cachyos-desktop-linux-{}\.iso)\s*<",
+        regex::escape(&version)
+    ))
+    .map_err(|e| AppError::Message(e.to_string()))?;
     let filename = iso_re
         .captures(&dir_html)
         .map(|c| c[1].to_string())
@@ -576,10 +603,18 @@ fn resolve_cachyos_image() -> Result<OsImage> {
             let fallback = format!("cachyos-desktop-linux-{version}.iso");
             dir_html.contains(&fallback).then_some(fallback)
         })
-        .ok_or_else(|| AppError::Message(format!("CachyOS mirror does not expose the expected ISO for {version}")))?;
+        .ok_or_else(|| {
+            AppError::Message(format!(
+                "CachyOS mirror does not expose the expected ISO for {version}"
+            ))
+        })?;
     let iso_url = format!("{dir_url}{filename}");
     let checksum_url = format!("{iso_url}.sha256");
-    let checksum_text = client.get(&checksum_url).send()?.error_for_status()?.text()?;
+    let checksum_text = client
+        .get(&checksum_url)
+        .send()?
+        .error_for_status()?
+        .text()?;
     let sha256 = parse_checksum(&checksum_text, &filename)?;
     Ok(OsImage {
         distro: Distro::Cachyos,
@@ -593,16 +628,27 @@ fn resolve_cachyos_image() -> Result<OsImage> {
 
 fn resolve_arch_image() -> Result<OsImage> {
     let client = http_client()?;
-    let html = client.get(ARCH_DOWNLOAD_PAGE).send()?.error_for_status()?.text()?;
-    let re = Regex::new(r"Current Release:\s*([0-9]+\.[0-9]+\.[0-9]+)").map_err(|e| AppError::Message(e.to_string()))?;
+    let html = client
+        .get(ARCH_DOWNLOAD_PAGE)
+        .send()?
+        .error_for_status()?
+        .text()?;
+    let re = Regex::new(r"Current Release:\s*([0-9]+\.[0-9]+\.[0-9]+)")
+        .map_err(|e| AppError::Message(e.to_string()))?;
     let version = re
         .captures(&html)
         .map(|c| c[1].to_string())
-        .ok_or_else(|| AppError::Message("could not determine the current Arch Linux release".into()))?;
+        .ok_or_else(|| {
+            AppError::Message("could not determine the current Arch Linux release".into())
+        })?;
     let filename = format!("archlinux-{version}-x86_64.iso");
     let iso_url = format!("{ARCH_MIRROR_ROOT}/{filename}");
     let checksum_url = format!("{ARCH_MIRROR_ROOT}/sha256sums.txt");
-    let checksum_text = client.get(&checksum_url).send()?.error_for_status()?.text()?;
+    let checksum_text = client
+        .get(&checksum_url)
+        .send()?
+        .error_for_status()?
+        .text()?;
     let sha256 = parse_checksum(&checksum_text, &filename)?;
     Ok(OsImage {
         distro: Distro::Arch,
@@ -616,19 +662,30 @@ fn resolve_arch_image() -> Result<OsImage> {
 
 fn resolve_debian_image() -> Result<OsImage> {
     let client = http_client()?;
-    let html = client.get(DEBIAN_DOWNLOAD_PAGE).send()?.error_for_status()?.text()?;
-    let re = Regex::new(r"debian-(\d+\.\d+\.\d+)-amd64-netinst\.iso").map_err(|e| AppError::Message(e.to_string()))?;
+    let html = client
+        .get(DEBIAN_DOWNLOAD_PAGE)
+        .send()?
+        .error_for_status()?
+        .text()?;
+    let re = Regex::new(r"debian-(\d+\.\d+\.\d+)-amd64-netinst\.iso")
+        .map_err(|e| AppError::Message(e.to_string()))?;
     let filename = re
         .captures(&html)
         .map(|c| c.get(0).unwrap().as_str().to_string())
-        .ok_or_else(|| AppError::Message("could not determine the current Debian amd64 netinst ISO".into()))?;
+        .ok_or_else(|| {
+            AppError::Message("could not determine the current Debian amd64 netinst ISO".into())
+        })?;
     let version = re
         .captures(&filename)
         .map(|c| c[1].to_string())
         .unwrap_or_else(|| "stable".into());
     let iso_url = format!("{DEBIAN_ISO_ROOT}/{filename}");
     let checksum_url = format!("{DEBIAN_ISO_ROOT}/SHA256SUMS");
-    let checksum_text = client.get(&checksum_url).send()?.error_for_status()?.text()?;
+    let checksum_text = client
+        .get(&checksum_url)
+        .send()?
+        .error_for_status()?
+        .text()?;
     let sha256 = parse_checksum(&checksum_text, &filename)?;
     Ok(OsImage {
         distro: Distro::Debian,
@@ -642,16 +699,27 @@ fn resolve_debian_image() -> Result<OsImage> {
 
 fn resolve_ubuntu_image() -> Result<OsImage> {
     let client = http_client()?;
-    let html = client.get(UBUNTU_DESKTOP_PAGE).send()?.error_for_status()?.text()?;
-    let re = Regex::new(r"Ubuntu\s+(\d+\.\d+\.\d+)\s+LTS").map_err(|e| AppError::Message(e.to_string()))?;
+    let html = client
+        .get(UBUNTU_DESKTOP_PAGE)
+        .send()?
+        .error_for_status()?
+        .text()?;
+    let re = Regex::new(r"Ubuntu\s+(\d+\.\d+\.\d+)\s+LTS")
+        .map_err(|e| AppError::Message(e.to_string()))?;
     let version = re
         .captures(&html)
         .map(|c| c[1].to_string())
-        .ok_or_else(|| AppError::Message("could not determine the current Ubuntu Desktop LTS version".into()))?;
+        .ok_or_else(|| {
+            AppError::Message("could not determine the current Ubuntu Desktop LTS version".into())
+        })?;
     let filename = format!("ubuntu-{version}-desktop-amd64.iso");
     let iso_url = format!("https://releases.ubuntu.com/{version}/{filename}");
     let checksum_url = format!("https://releases.ubuntu.com/{version}/SHA256SUMS");
-    let checksum_text = client.get(&checksum_url).send()?.error_for_status()?.text()?;
+    let checksum_text = client
+        .get(&checksum_url)
+        .send()?
+        .error_for_status()?
+        .text()?;
     let sha256 = parse_checksum(&checksum_text, &filename)?;
     Ok(OsImage {
         distro: Distro::Ubuntu,
@@ -736,7 +804,12 @@ fn download_and_verify(image: &OsImage, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn start_vm(data_dir: &Path, name: &str, installer: bool, graphics_override: Option<GraphicsMode>) -> Result<()> {
+fn start_vm(
+    data_dir: &Path,
+    name: &str,
+    installer: bool,
+    graphics_override: Option<GraphicsMode>,
+) -> Result<()> {
     let config = load_config(data_dir, name)?;
     let vm_dir = config_dir(&config)?;
     if is_running(&vm_dir)? {
@@ -785,47 +858,79 @@ fn run_qemu(
     // host-side GL context and VNC as the display transport. Clipboard is
     // handled by QEMU's qemu-vdagent channel and the spice-vdagent service
     // inside the guest. No SPICE server is involved.
-    let display_backend = if use_venus {
-        "egl-headless"
-    } else {
-        "none"
-    };
+    let display_backend = if use_venus { "egl-headless" } else { "none" };
 
     let mut virtiofs_children = Vec::<Child>::new();
     let mut args = vec![
-        "-name".into(), config.name.clone().into(),
-        "-machine".into(), "q35".into(),
-        "-accel".into(), "kvm".into(),
-        "-cpu".into(), "host".into(),
-        "-smp".into(), config.cpus.to_string().into(),
-        "-pidfile".into(), pid_file.as_os_str().into(),
-        "-vga".into(), "none".into(),
-        "-display".into(), display_backend.into(),
-        "-drive".into(), format!("if=pflash,format=raw,readonly=on,file={}", path_arg(ovmf_code)).into(),
-        "-drive".into(), format!("if=pflash,format=raw,file={}", path_arg(&config.uefi_vars)).into(),
-        "-drive".into(), format!("if=none,id=disk0,format=qcow2,file={},discard=unmap,cache=writeback", path_arg(&config.disk)).into(),
-        "-device".into(), "virtio-blk-pci,drive=disk0".into(),
-        "-netdev".into(), "user,id=net0".into(),
-        "-device".into(), "virtio-net-pci,netdev=net0".into(),
+        "-name".into(),
+        config.name.clone().into(),
+        "-machine".into(),
+        "q35".into(),
+        "-accel".into(),
+        "kvm".into(),
+        "-cpu".into(),
+        "host".into(),
+        "-smp".into(),
+        config.cpus.to_string().into(),
+        "-pidfile".into(),
+        pid_file.as_os_str().into(),
+        "-vga".into(),
+        "none".into(),
+        "-display".into(),
+        display_backend.into(),
+        "-drive".into(),
+        format!(
+            "if=pflash,format=raw,readonly=on,file={}",
+            path_arg(ovmf_code)
+        )
+        .into(),
+        "-drive".into(),
+        format!("if=pflash,format=raw,file={}", path_arg(&config.uefi_vars)).into(),
+        "-drive".into(),
+        format!(
+            "if=none,id=disk0,format=qcow2,file={},discard=unmap,cache=writeback",
+            path_arg(&config.disk)
+        )
+        .into(),
+        "-device".into(),
+        "virtio-blk-pci,drive=disk0".into(),
+        "-netdev".into(),
+        "user,id=net0".into(),
+        "-device".into(),
+        "virtio-net-pci,netdev=net0".into(),
         // Expose the QEMU Guest Agent through a virtio-serial port.
         // This is consumed in the guest by qemu-guest-agent.service.
-        "-chardev".into(), format!("socket,id=qga0,path={},server=on,wait=off", path_arg(&qga_socket)).into(),
-        "-device".into(), "virtio-serial-pci,id=virtio-serial0,max_ports=16".into(),
-        "-device".into(), format!("virtserialport,chardev=qga0,name={QGA_PORT_NAME}").into(),
+        "-chardev".into(),
+        format!(
+            "socket,id=qga0,path={},server=on,wait=off",
+            path_arg(&qga_socket)
+        )
+        .into(),
+        "-device".into(),
+        "virtio-serial-pci,id=virtio-serial0,max_ports=16".into(),
+        "-device".into(),
+        format!("virtserialport,chardev=qga0,name={QGA_PORT_NAME}").into(),
         // QEMU's built-in vdagent implementation speaks the spice-vdagent
         // protocol without starting a SPICE server. VNC clients such as
         // TigerVNC can transport the resulting clipboard traffic.
-        "-chardev".into(), "qemu-vdagent,id=vdagent0,name=vdagent,clipboard=on,mouse=off".into(),
-        "-device".into(), format!("virtserialport,chardev=vdagent0,name={QEMU_VDAGENT_PORT_NAME}").into(),
-        "-device".into(), "ich9-intel-hda".into(),
-        "-device".into(), "hda-duplex".into(),
-        "-boot".into(), if installer { "once=d,menu=on".into() } else { "strict=on".into() },
+        "-chardev".into(),
+        "qemu-vdagent,id=vdagent0,name=vdagent,clipboard=on,mouse=off".into(),
+        "-device".into(),
+        format!("virtserialport,chardev=vdagent0,name={QEMU_VDAGENT_PORT_NAME}").into(),
+        "-device".into(),
+        "ich9-intel-hda".into(),
+        "-device".into(),
+        "hda-duplex".into(),
+        "-boot".into(),
+        if installer {
+            "once=d,menu=on".into()
+        } else {
+            "strict=on".into()
+        },
     ];
 
     let display_number = (vnc_port - 5900).to_string();
-    args.extend([
-        "-vnc".into(), format!("127.0.0.1:{display_number}").into(),
-    ]);
+    args.extend(["-vnc".into(), format!("127.0.0.1:{display_number}").into()]);
 
     // vhost-user-fs requires a shared memory backend. Keep -m in sync with
     // the memory-backend-memfd size; otherwise QEMU rejects the NUMA config.
@@ -833,17 +938,26 @@ fn run_qemu(
         args.extend(["-m".into(), config.ram.clone().into()]);
     } else {
         args.extend([
-            "-m".into(), config.ram.clone().into(),
-            "-object".into(), format!("memory-backend-memfd,id=mem,size={},share=on", config.ram).into(),
-            "-numa".into(), "node,memdev=mem".into(),
+            "-m".into(),
+            config.ram.clone().into(),
+            "-object".into(),
+            format!("memory-backend-memfd,id=mem,size={},share=on", config.ram).into(),
+            "-numa".into(),
+            "node,memdev=mem".into(),
         ]);
     }
 
     if use_venus {
         let gpu_device = if qemu_has_device("virtio-vga-gl") {
-            format!("virtio-vga-gl,hostmem={},blob=true,venus=true", config.gpu_memory)
+            format!(
+                "virtio-vga-gl,hostmem={},blob=true,venus=true",
+                config.gpu_memory
+            )
         } else {
-            format!("virtio-gpu-gl,hostmem={},blob=true,venus=true", config.gpu_memory)
+            format!(
+                "virtio-gpu-gl,hostmem={},blob=true,venus=true",
+                config.gpu_memory
+            )
         };
         args.extend(["-device".into(), gpu_device.into()]);
     } else {
@@ -857,9 +971,8 @@ fn run_qemu(
     for (idx, share) in config.shares.iter().enumerate() {
         let socket = vm_dir.join(format!("virtiofs-{idx}.sock"));
         let _ = fs::remove_file(&socket);
-        let virtiofsd = find_virtiofsd().ok_or_else(|| {
-            AppError::Message("virtiofsd was not found".into())
-        })?;
+        let virtiofsd =
+            find_virtiofsd().ok_or_else(|| AppError::Message("virtiofsd was not found".into()))?;
         let log_path = vm_dir.join(format!("virtiofs-{idx}.log"));
         let mut child = match spawn_virtiofsd(&virtiofsd, &socket, share, &log_path) {
             Ok(child) => child,
@@ -871,7 +984,9 @@ fn run_qemu(
                 return Err(e);
             }
         };
-        if let Err(e) = wait_for_virtiofs_socket(&mut child, &socket, Duration::from_secs(5), &log_path) {
+        if let Err(e) =
+            wait_for_virtiofs_socket(&mut child, &socket, Duration::from_secs(5), &log_path)
+        {
             let _ = child.kill();
             let _ = child.wait();
             for existing in &mut virtiofs_children {
@@ -882,8 +997,10 @@ fn run_qemu(
         }
         virtiofs_children.push(child);
         args.extend([
-            "-chardev".into(), format!("socket,id=char{idx},path={}", path_arg(&socket)).into(),
-            "-device".into(), format!("vhost-user-fs-pci,chardev=char{idx},tag=share{idx},queue-size=1024").into(),
+            "-chardev".into(),
+            format!("socket,id=char{idx},path={}", path_arg(&socket)).into(),
+            "-device".into(),
+            format!("vhost-user-fs-pci,chardev=char{idx},tag=share{idx},queue-size=1024").into(),
         ]);
     }
 
@@ -923,7 +1040,9 @@ fn run_qemu(
     if !installer && !config.shares.is_empty() {
         match wait_for_qga_and_mount_shares(&qga_socket, &config.shares, Duration::from_secs(60)) {
             Ok(()) => println!("All virtiofs shares mounted in the guest under /mnt/vmforge/ …"),
-            Err(error) => eprintln!("Warning: could not automatically mount virtiofs shares in the guest: {error}"),
+            Err(error) => eprintln!(
+                "Warning: could not automatically mount virtiofs shares in the guest: {error}"
+            ),
         }
     }
 
@@ -957,21 +1076,24 @@ fn run_qemu(
 fn qemu_has_display(name: &str) -> bool {
     let Ok(output) = Command::new("qemu-system-x86_64")
         .args(["-display", "help"])
-        .output() else {
+        .output()
+    else {
         return false;
     };
     let text = String::from_utf8_lossy(&output.stdout);
-    output.status.success() && text.lines().any(|line| {
-        line.trim_start()
-            .strip_prefix(name)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(',') || rest.starts_with(' '))
-    })
+    output.status.success()
+        && text.lines().any(|line| {
+            line.trim_start().strip_prefix(name).is_some_and(|rest| {
+                rest.is_empty() || rest.starts_with(',') || rest.starts_with(' ')
+            })
+        })
 }
 
 fn qemu_has_device(name: &str) -> bool {
     let Ok(output) = Command::new("qemu-system-x86_64")
         .args(["-device", &format!("{name},help")])
-        .output() else {
+        .output()
+    else {
         return false;
     };
     output.status.success()
@@ -980,7 +1102,8 @@ fn qemu_has_device(name: &str) -> bool {
 fn qemu_has_chardev(name: &str) -> bool {
     let Ok(output) = Command::new("qemu-system-x86_64")
         .args(["-chardev", "help"])
-        .output() else {
+        .output()
+    else {
         return false;
     };
     let text = String::from_utf8_lossy(&output.stdout);
@@ -1006,7 +1129,9 @@ fn wait_for_tcp_port(port: u16, timeout: Duration, what: &str) -> Result<()> {
         if TcpStream::connect_timeout(
             &SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
             Duration::from_millis(100),
-        ).is_ok() {
+        )
+        .is_ok()
+        {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(50));
@@ -1016,16 +1141,30 @@ fn wait_for_tcp_port(port: u16, timeout: Duration, what: &str) -> Result<()> {
     )))
 }
 
-fn wait_for_qga_and_mount_shares(socket: &Path, shares: &[PathBuf], timeout: Duration) -> Result<()> {
+fn wait_for_qga_and_mount_shares(
+    socket: &Path,
+    shares: &[PathBuf],
+    timeout: Duration,
+) -> Result<()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        match qga_request(socket, serde_json::json!({"execute":"guest-ping"}), Duration::from_secs(2)) {
+        match qga_request(
+            socket,
+            serde_json::json!({"execute":"guest-ping"}),
+            Duration::from_secs(2),
+        ) {
             Ok(_) => break,
             Err(_) => thread::sleep(Duration::from_millis(500)),
         }
     }
 
-    if qga_request(socket, serde_json::json!({"execute":"guest-ping"}), Duration::from_secs(2)).is_err() {
+    if qga_request(
+        socket,
+        serde_json::json!({"execute":"guest-ping"}),
+        Duration::from_secs(2),
+    )
+    .is_err()
+    {
         return Err(AppError::Message(
             "qemu-guest-agent did not become ready within 60s".into(),
         ));
@@ -1043,9 +1182,16 @@ fn wait_for_qga_and_mount_shares(socket: &Path, shares: &[PathBuf], timeout: Dur
     Ok(())
 }
 
-fn qga_request(socket: &Path, request: serde_json::Value, timeout: Duration) -> Result<serde_json::Value> {
+fn qga_request(
+    socket: &Path,
+    request: serde_json::Value,
+    timeout: Duration,
+) -> Result<serde_json::Value> {
     let mut stream = UnixStream::connect(socket).map_err(|e| {
-        AppError::Message(format!("could not connect to QEMU Guest Agent socket {}: {e}", socket.display()))
+        AppError::Message(format!(
+            "could not connect to QEMU Guest Agent socket {}: {e}",
+            socket.display()
+        ))
     })?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
@@ -1058,13 +1204,23 @@ fn qga_request(socket: &Path, request: serde_json::Value, timeout: Duration) -> 
     let mut response = String::new();
     reader.read_line(&mut response)?;
     if response.trim().is_empty() {
-        return Err(AppError::Message("QEMU Guest Agent returned an empty response".into()));
+        return Err(AppError::Message(
+            "QEMU Guest Agent returned an empty response".into(),
+        ));
     }
     let value: serde_json::Value = serde_json::from_str(&response)?;
     if let Some(error) = value.get("error") {
-        let class = error.get("class").and_then(serde_json::Value::as_str).unwrap_or("unknown");
-        let desc = error.get("desc").and_then(serde_json::Value::as_str).unwrap_or("unknown error");
-        return Err(AppError::Message(format!("QEMU Guest Agent error {class}: {desc}")));
+        let class = error
+            .get("class")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let desc = error
+            .get("desc")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown error");
+        return Err(AppError::Message(format!(
+            "QEMU Guest Agent error {class}: {desc}"
+        )));
     }
     Ok(value)
 }
@@ -1116,7 +1272,9 @@ fn qga_exec(socket: &Path, command: &str) -> Result<()> {
         }
     }
 
-    Err(AppError::Message("guest command did not finish within 10 seconds".into()))
+    Err(AppError::Message(
+        "guest command did not finish within 10 seconds".into(),
+    ))
 }
 
 fn spawn_virtiofsd(binary: &Path, socket: &Path, share: &Path, log_path: &Path) -> Result<Child> {
@@ -1131,14 +1289,21 @@ fn spawn_virtiofsd(binary: &Path, socket: &Path, share: &Path, log_path: &Path) 
     };
 
     let log = File::create(log_path).map_err(|e| {
-        AppError::Message(format!("could not create virtiofsd log {}: {e}", log_path.display()))
+        AppError::Message(format!(
+            "could not create virtiofsd log {}: {e}",
+            log_path.display()
+        ))
     })?;
 
     cmd.args([
-        OsString::from("--socket-path"), socket.as_os_str().into(),
-        OsString::from("--shared-dir"), share.as_os_str().into(),
-        OsString::from("--sandbox"), OsString::from(if root { "namespace" } else { "chroot" }),
-        OsString::from("--cache"), OsString::from("auto"),
+        OsString::from("--socket-path"),
+        socket.as_os_str().into(),
+        OsString::from("--shared-dir"),
+        share.as_os_str().into(),
+        OsString::from("--sandbox"),
+        OsString::from(if root { "namespace" } else { "chroot" }),
+        OsString::from("--cache"),
+        OsString::from("auto"),
     ]);
     let log_err = log.try_clone()?;
     let mut child = cmd
@@ -1238,7 +1403,8 @@ fn connect_vm(data_dir: &Path, name: &str) -> Result<()> {
         .map_err(|_| AppError::Message("invalid VNC port file".into()))?;
     if !command_exists("vncviewer") {
         return Err(AppError::Message(
-            "`vncviewer` was not found. Install TigerVNC (for example: `sudo pacman -S tigervnc`).".into(),
+            "`vncviewer` was not found. Install TigerVNC (for example: `sudo pacman -S tigervnc`)."
+                .into(),
         ));
     }
 
@@ -1249,13 +1415,20 @@ fn connect_vm(data_dir: &Path, name: &str) -> Result<()> {
         .status()
         .map_err(|e| AppError::Message(format!("vncviewer could not be started: {e}")))?;
     if !status.success() {
-        return Err(AppError::Message(format!("vncviewer exited with status {status}")));
+        return Err(AppError::Message(format!(
+            "vncviewer exited with status {status}"
+        )));
     }
     Ok(())
 }
 
 fn command_exists(name: &str) -> bool {
-    Command::new(name).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
+    Command::new(name)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
 }
 
 fn stop_vm(data_dir: &Path, name: &str) -> Result<()> {
@@ -1266,9 +1439,10 @@ fn stop_vm(data_dir: &Path, name: &str) -> Result<()> {
         println!("VM `{name}` is not running.");
         return Ok(());
     }
-    let pid: i32 = fs::read_to_string(&pid_file)?.trim().parse().map_err(|_| {
-        AppError::Message("invalid QEMU PID file".into())
-    })?;
+    let pid: i32 = fs::read_to_string(&pid_file)?
+        .trim()
+        .parse()
+        .map_err(|_| AppError::Message("invalid QEMU PID file".into()))?;
     if !is_pid_alive(pid) {
         let _ = fs::remove_file(&pid_file);
         println!("VM `{name}` is no longer running; removed stale PID file.");
@@ -1347,18 +1521,58 @@ fn list_vms(data_dir: &Path) -> Result<()> {
 
 fn doctor() -> Result<()> {
     println!("vmforge doctor");
-    println!("  Linux x86_64: {}", cfg!(target_os = "linux") && cfg!(target_arch = "x86_64"));
+    println!(
+        "  Linux x86_64: {}",
+        cfg!(target_os = "linux") && cfg!(target_arch = "x86_64")
+    );
     report_binary("qemu-system-x86_64");
     report_binary("qemu-img");
     println!(
         "  virtiofsd: {}",
-        find_virtiofsd().map(|p| p.display().to_string()).unwrap_or_else(|| "NOT FOUND".into())
+        find_virtiofsd()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "NOT FOUND".into())
     );
-    println!("  /dev/kvm: {}", if Path::new("/dev/kvm").exists() { "present" } else { "missing" });
-    println!("  QEMU egl-headless display: {}", if qemu_has_display("egl-headless") { "supported" } else { "not available" });
-    println!("  virtio-vga-gl: {}", if qemu_has_device("virtio-vga-gl") { "supported" } else { "not available" });
-    println!("  qemu-vdagent chardev: {}", if qemu_has_chardev("qemu-vdagent") { "supported" } else { "not available" });
-    println!("  vncviewer: {}", if command_exists("vncviewer") { "found" } else { "missing (install tigervnc)" });
+    println!(
+        "  /dev/kvm: {}",
+        if Path::new("/dev/kvm").exists() {
+            "present"
+        } else {
+            "missing"
+        }
+    );
+    println!(
+        "  QEMU egl-headless display: {}",
+        if qemu_has_display("egl-headless") {
+            "supported"
+        } else {
+            "not available"
+        }
+    );
+    println!(
+        "  virtio-vga-gl: {}",
+        if qemu_has_device("virtio-vga-gl") {
+            "supported"
+        } else {
+            "not available"
+        }
+    );
+    println!(
+        "  qemu-vdagent chardev: {}",
+        if qemu_has_chardev("qemu-vdagent") {
+            "supported"
+        } else {
+            "not available"
+        }
+    );
+    println!(
+        "  vncviewer: {}",
+        if command_exists("vncviewer") {
+            "found"
+        } else {
+            "missing (install tigervnc)"
+        }
+    );
     println!(
         "  QEMU module dir: {}",
         qemu_module_dir()
@@ -1410,9 +1624,11 @@ fn load_config(data_dir: &Path, name: &str) -> Result<VmConfig> {
 }
 
 fn config_dir(config: &VmConfig) -> Result<PathBuf> {
-    config.disk.parent().map(PathBuf::from).ok_or_else(|| {
-        AppError::Message("VM configuration has no valid directory".into())
-    })
+    config
+        .disk
+        .parent()
+        .map(PathBuf::from)
+        .ok_or_else(|| AppError::Message("VM configuration has no valid directory".into()))
 }
 
 fn is_running(vm_dir: &Path) -> Result<bool> {
@@ -1420,9 +1636,10 @@ fn is_running(vm_dir: &Path) -> Result<bool> {
     if !pid_file.exists() {
         return Ok(false);
     }
-    let pid: i32 = fs::read_to_string(pid_file)?.trim().parse().map_err(|_| {
-        AppError::Message("invalid QEMU PID file".into())
-    })?;
+    let pid: i32 = fs::read_to_string(pid_file)?
+        .trim()
+        .parse()
+        .map_err(|_| AppError::Message("invalid QEMU PID file".into()))?;
     Ok(is_pid_alive(pid))
 }
 
@@ -1432,9 +1649,14 @@ fn is_pid_alive(pid: i32) -> bool {
 
 fn validate_name(name: &str) -> Result<String> {
     if name.is_empty() || name.len() > 64 {
-        return Err(AppError::Message("VM name must be 1..64 characters long".into()));
+        return Err(AppError::Message(
+            "VM name must be 1..64 characters long".into(),
+        ));
     }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(AppError::Message(
             "VM name may only contain A-Z, a-z, 0-9, - and _".into(),
         ));
@@ -1447,7 +1669,10 @@ fn temp_name() -> String {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn http_client() -> Result<Client> {
@@ -1468,7 +1693,9 @@ fn require_binary(name: &str) -> Result<()> {
 fn report_binary(name: &str) {
     println!(
         "  {name}: {}",
-        find_binary(name).map(|p| p.display().to_string()).unwrap_or_else(|| "NOT FOUND".into())
+        find_binary(name)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "NOT FOUND".into())
     );
 }
 
@@ -1527,13 +1754,19 @@ fn find_ovmf() -> Result<(PathBuf, PathBuf)> {
 
     for directory in directories {
         let dir = Path::new(directory);
-        let Ok(entries) = fs::read_dir(dir) else { continue };
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
         let mut code_candidates = Vec::new();
         let mut vars_candidates = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-            if !path.is_file() { continue }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !path.is_file() {
+                continue;
+            }
             if name.starts_with("OVMF_CODE") && name.ends_with(".fd") && !name.contains("secboot") {
                 code_candidates.push(path);
             } else if name.starts_with("OVMF_VARS") && name.ends_with(".fd") {
@@ -1543,12 +1776,15 @@ fn find_ovmf() -> Result<(PathBuf, PathBuf)> {
         code_candidates.sort();
         vars_candidates.sort();
         for code in code_candidates {
-            let Some(code_name) = code.file_name().and_then(|n| n.to_str()) else { continue };
+            let Some(code_name) = code.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
             let suffix = code_name.strip_prefix("OVMF_CODE").unwrap_or("");
             let expected_vars = format!("OVMF_VARS{suffix}");
-            if let Some(vars) = vars_candidates.iter().find(|p| {
-                p.file_name().and_then(|n| n.to_str()) == Some(expected_vars.as_str())
-            }) {
+            if let Some(vars) = vars_candidates
+                .iter()
+                .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(expected_vars.as_str()))
+            {
                 return Ok((code, vars.clone()));
             }
         }
@@ -1588,7 +1824,11 @@ fn qemu_has_venus() -> Result<bool> {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        if output.status.success() && text.lines().any(|line| line.trim_start().starts_with("venus")) {
+        if output.status.success()
+            && text
+                .lines()
+                .any(|line| line.trim_start().starts_with("venus"))
+        {
             return Ok(true);
         }
     }
@@ -1618,14 +1858,19 @@ fn path_arg(path: &Path) -> String {
 }
 
 fn render_command(args: &[OsString]) -> String {
-    args.iter().map(|s| shell_quote(&s.to_string_lossy())).collect::<Vec<_>>().join(" ")
+    args.iter()
+        .map(|s| shell_quote(&s.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn shell_quote(s: &str) -> String {
-    if s.bytes().all(|b| matches!(b,
-        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' |
-        b'_' | b'-' | b'.' | b'/' | b':' | b',' | b'=' | b'+'
-    )) {
+    if s.bytes().all(|b| {
+        matches!(b,
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' |
+            b'_' | b'-' | b'.' | b'/' | b':' | b',' | b'=' | b'+'
+        )
+    }) {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
