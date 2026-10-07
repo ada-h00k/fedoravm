@@ -1,6 +1,6 @@
 [package]
 name = "vmforge"
-version = "0.4.3"
+version = "0.3.1"
 edition = "2021"
 description = "Small QEMU/KVM VM manager for Linux distributions"
 license = "AGPL-3.0-or-later"

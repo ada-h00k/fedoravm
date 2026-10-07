@@ -142,24 +142,6 @@ sudo mount -t virtiofs share0 /mnt/host-documents
 
 The VM must be stopped while changing its persistent share configuration.
 
-`vmforge` starts one `virtiofsd` process per share and waits until the Unix socket is actually accepting connections before starting QEMU. If a share backend fails, its diagnostic log is written to the VM state directory as `virtiofs-N.log`.
-
-For normal VM boots, `vmforge` automatically mounts configured shares through the QEMU Guest Agent under `/mnt/vmforge/share0`, `/mnt/vmforge/share1`, and so on.
-
-Verify them inside the guest with:
-
-```bash
-mount | grep virtiofs
-touch /mnt/vmforge/share0/vmforge-test
-```
-
-For live installers or guests without `qemu-guest-agent`, the device is still exposed as `share0`, `share1`, etc. and can be mounted manually:
-
-```bash
-sudo mkdir -p /mnt/host-documents
-sudo mount -t virtiofs share0 /mnt/host-documents
-```
-
 
 ## QEMU Guest Agent
 
@@ -283,136 +265,166 @@ The distro flags select the installer image; they do not attempt an unattended O
 Arch Linux uses the official text-based installation environment, while Debian uses the stable netinst installer image. Fedora KDE, CachyOS Desktop, and Ubuntu Desktop use their respective graphical installer/live images.
 
 
-### Clipboard synchronization
+### SPICE on CachyOS / Arch Linux
 
-`vmforge` does **not** use a SPICE display server. This avoids the incompatibilities between SPICE display output and the accelerated Venus graphics path.
-
-For clipboard synchronization, `vmforge` uses QEMU's built-in `qemu-vdagent` implementation together with a local VNC display. The guest still uses the standard `spice-vdagent` service, because `qemu-vdagent` speaks the same agent protocol. QEMU supports this arrangement with VNC, and TigerVNC provides the host-side clipboard integration.
-
-On CachyOS / Arch Linux, install TigerVNC:
+`vmforge` uses SPICE for the `spice-vdagent` clipboard channel. Arch-family QEMU packages are split, so a minimal `qemu-base` installation does not necessarily include the SPICE chardev backend. On CachyOS, install `qemu-chardev-spice` (or the complete `qemu-full` package) before starting a VM with SPICE clipboard support.
 
 ```bash
-sudo pacman -S tigervnc
+sudo pacman -S qemu-chardev-spice
+# or
+sudo pacman -S qemu-full
 ```
 
-Inside a Fedora guest:
+`vmforge doctor` should then report the SPICE chardev as available.
+
+### SPICE agent and clipboard
+
+`vmforge` exposes a dedicated SPICE agent channel (`com.redhat.spice.0`) in every VM in addition to the QEMU Guest Agent channel. This is the channel used by Linux `spice-vdagentd`/`spice-vdagent` for clipboard integration and dynamic display features. The host-side SPICE server listens on a per-VM Unix socket and is not exposed on the network.
+
+After installing `spice-vdagent` in the guest, start the VM and connect with:
 
 ```bash
-sudo dnf install spice-vdagent
+vmforge connect <name>
 ```
 
-Inside an Arch/CachyOS guest:
+The command uses `remote-viewer` from the `virt-viewer` package. Clipboard sharing then uses the SPICE client and the guest's `spice-vdagent` stack. The guest side needs a virtio-serial controller plus a `spicevmc` channel named `com.redhat.spice.0`, which is what vmforge adds automatically.
+
+On Arch/CachyOS:
 
 ```bash
-sudo pacman -S spice-vdagent
+sudo pacman -S virt-viewer spice-vdagent
 ```
 
-Make sure the user-session agent is running. On a desktop session, the package normally starts the agent automatically; when debugging, check:
+For example:
 
 ```bash
+vmforge start compile
+vmforge connect compile
+```
+
+Verify the guest side with:
+
+```bash
+ls -l /dev/virtio-ports/com.redhat.spice.0
+systemctl status spice-vdagentd.socket
 systemctl --user status spice-vdagent
 ```
 
-The VM exposes the agent protocol on:
+The system daemon can legitimately appear as inactive when there is no active session; the socket and the per-user `spice-vdagent` session service are the more useful checks.
 
-```text
-com.redhat.spice.0
-```
+The existing local QEMU window can still be used, but the SPICE client window is the one that provides the SPICE clipboard channel. QEMU's local GTK/SDL clipboard mechanisms are separate from `spice-vdagentd`. On Plasma Wayland, also verify that the user-session `spice-vdagent` service is running; `spice-vdagentd` is only the system-side daemon.
 
-The name comes from the spice-vdagent protocol; **no `spicevmc` backend and no SPICE server are used**.
+## License
 
-`vmforge start NAME` starts QEMU with Venus plus a localhost-only VNC server and opens `vncviewer`. To open another viewer for an already running VM:
+`vmforge` is licensed under the **GNU Affero General Public License v3.0 or later**. See [LICENSE](LICENSE).
 
-```bash
-vmforge connect NAME
-```
 
-Closing the viewer does not stop the VM. Stop it with:
+### QEMU Venus detection
 
-```bash
-vmforge stop NAME
-```
+`vmforge` checks the actual QEMU device properties using `-device <device>,help` and accepts Venus when the `venus` property is exposed by either `virtio-gpu-gl` or `virtio-vga-gl`.
 
-### Venus graphics and display architecture
 
-The default installed-guest graphics path is:
+## SPICE on Arch/CachyOS
 
-```text
-virtio-vga-gl + hostmem + blob + venus
-             |
-             v
-       egl-headless
-             |
-             v
-      local VNC server
-             |
-             v
-          vncviewer
-```
+On current Arch-based distributions, QEMU's SPICE chardev backend is shipped as a loadable module (`qemu-chardev-spice`, typically `/usr/lib/qemu/chardev-spice.so`). `vmforge` probes the actual backend instead of relying on `qemu-system-x86_64 -chardev help`, which can report a false negative when the module has not yet been loaded.
 
-QEMU documents `virtio-gpu-gl,hostmem=...,blob=true,venus=true` as the Venus configuration. It also documents `egl-headless` as a GL offload backend that can be paired with VNC. This keeps the accelerated virtio-gpu device separate from the desktop display client.
-
-Clipboard traffic uses:
-
-```text
-vncviewer <-> QEMU VNC clipboard <-> qemu-vdagent
-                         |
-                         v
-              com.redhat.spice.0
-                         |
-                         v
-                  spice-vdagent
-                         |
-                         v
-                 guest clipboard
-```
-
-This requires a QEMU build with the `qemu-vdagent` chardev and a VNC client that supports clipboard synchronization. On Arch/CachyOS, the `tigervnc` package provides `vncviewer`.
-
-### CachyOS / Arch host packages
-
-A practical host setup is:
+To verify the installed module:
 
 ```bash
-sudo pacman -Syu qemu-desktop tigervnc
+pacman -Qo /usr/lib/qemu/chardev-spice.so
 ```
 
-For virtiofs shares you also need `virtiofsd`.
+Keep the QEMU split packages on the same version, for example `qemu-base`, `qemu-common`, and `qemu-chardev-spice`.
 
-`qemu-desktop` pulls in the QEMU desktop components, including the virtio-gpu GL device, VNC-related display infrastructure and EGL headless support. Current Arch package metadata lists these as split packages of QEMU.
 
-### Troubleshooting clipboard
+### Troubleshooting SPICE on CachyOS / Arch
 
-First check the host:
+`vmforge` does not use `qemu-system-x86_64 -chardev help` to decide whether SPICE is installed. Current Arch packages split optional QEMU drivers into loadable modules; `qemu-chardev-spice` provides the SPICE chardev driver as `/usr/lib/qemu/chardev-spice.so`. `vmforge` probes the real `spicevmc` backend instead.
+
+Check the module with:
+
+```bash
+pacman -Qo /usr/lib/qemu/chardev-spice.so
+```
+
+You can also run:
 
 ```bash
 vmforge doctor
 ```
 
-Look for:
+and look for `QEMU SPICE chardev: supported`.
+
+
+### SPICE on modern QEMU
+
+`vmforge` uses QEMU's current Unix-socket syntax for SPICE:
 
 ```text
-qemu-vdagent chardev: supported
-vncviewer: found
+-spice unix=on,addr=/path/to/spice.sock,disable-ticketing=on
 ```
 
-Then check the guest:
+Older examples using `-spice unix=/path/to/socket` are not valid with current QEMU because `unix` is a boolean option; the socket path is supplied through `addr`. See the QEMU invocation documentation.
+
+### SPICE and Clipboard on Arch/CachyOS
+
+When accelerated graphics (Venus) is enabled, `vmforge` must not combine a GL-enabled SDL/GTK display with a SPICE display server. QEMU rejects that combination. Instead, `vmforge` prefers QEMU's `spice-app,gl=on` display when the optional `qemu-ui-spice-app` module is installed. Otherwise it uses a SPICE Unix socket with `gl=on` and `vmforge connect <name>` / `remote-viewer`. QEMU documents both the `spice-app` display and SPICE OpenGL configuration; the SPICE manual recommends native SPICE GL where possible.
+
+On Arch/CachyOS, the embedded viewer is provided by `qemu-ui-spice-app` (and depends on the matching QEMU/SPICE split packages). If it is not installed, install it with:
+
+```bash
+sudo pacman -S qemu-ui-spice-app
+```
+
+The guest agent channel remains `com.redhat.spice.0`, so `spice-vdagent` can provide clipboard and dynamic-resolution support.
+
+
+## Graphics and clipboard
+
+The normal VM configuration intentionally uses one display path only:
+
+```text
+virtio-vga-gl + Venus -> QEMU SPICE (GL) -> remote-viewer
+                         \-> spice-vdagent -> host/guest clipboard
+```
+
+QEMU is started with:
+
+```text
+-display egl-headless
+-spice gl=on,unix=on,addr=/path/to/spice.sock,disable-ticketing=on,disable-copy-paste=off
+-device virtio-vga-gl,hostmem=4G,blob=true,venus=true
+```
+
+`egl-headless` provides the host OpenGL context while SPICE transports the display to `remote-viewer`. This avoids mixing SDL/GTK OpenGL with SPICE. QEMU's current documentation explicitly describes `egl-headless` as the OpenGL offload backend to pair with SPICE and documents the `venus=true` virtio-gpu configuration.
+
+Clipboard synchronization requires the guest-side `spice-vdagent`/`spice-vdagentd` package and the QEMU `com.redhat.spice.0` virtio-serial channel. `vmforge` adds that channel automatically.
+
+`vmforge start NAME` launches `remote-viewer` automatically. `vmforge connect NAME` can be used to open another viewer for an already running VM. Closing the viewer leaves the VM running; use `vmforge stop NAME` to stop it.
+
+For safe graphics troubleshooting, `--graphics safe` disables Venus and uses plain virtio-gpu.
+
+
+## Testing Venus and clipboard
+
+Inside the Linux guest, verify that the virtio GPU is present:
+
+```bash
+lspci -nnk | grep -A4 -Ei 'VGA|3D|Display'
+```
+
+Verify the SPICE agent port:
 
 ```bash
 ls -l /dev/virtio-ports/com.redhat.spice.0
-systemctl --user status spice-vdagent
 ```
 
-The virtio port should exist while the VM is running.
+Make sure the guest agent is installed (`spice-vdagent` on Fedora/Arch) and running in the desktop session. Then copy text in both directions between the host and guest.
 
-If the port exists but the clipboard does not synchronize, restart the per-user agent:
+For Vulkan/Venus, install `vulkan-tools` and run:
 
 ```bash
-systemctl --user restart spice-vdagent
+vulkaninfo --summary
 ```
 
-Then copy plain text in both directions. The current QEMU/Arch design uses the `qemu-vdagent` chardev for this VNC clipboard path; `qemu-guest-agent` is a separate channel and is not responsible for clipboard synchronization.
-
-## License
-
-`vmforge` is free software licensed under the GNU Affero General Public License, version 3 or later. See `LICENSE`.
+The virtio/Venus device should be visible.
