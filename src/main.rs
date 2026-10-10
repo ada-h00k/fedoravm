@@ -9,11 +9,12 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -120,6 +121,9 @@ enum CommandKind {
     Start(StartArgs),
     /// Start an existing VM and boot its installer once.
     Install(StartArgs),
+    /// Internal detached VM supervisor (not intended for direct use).
+    #[command(name = "__run", hide = true)]
+    RunInternal(InternalRunArgs),
     /// Connect to the running VM using the local VNC display (clipboard via qemu-vdagent).
     Connect(VmRefArgs),
     /// Send SIGTERM to a running VM.
@@ -153,6 +157,17 @@ struct VmRefArgs {
 #[derive(Args, Debug)]
 struct StartArgs {
     name: String,
+    /// Override the VM graphics mode for this boot.
+    #[arg(long, value_enum)]
+    graphics: Option<GraphicsMode>,
+}
+
+#[derive(Args, Debug)]
+struct InternalRunArgs {
+    name: String,
+    /// Boot the installer ISO instead of the installed disk.
+    #[arg(long)]
+    installer: bool,
     /// Override the VM graphics mode for this boot.
     #[arg(long, value_enum)]
     graphics: Option<GraphicsMode>,
@@ -289,8 +304,11 @@ fn main() -> Result<()> {
 
     match cli.command {
         CommandKind::Create(args) => create_vm(&data_dir, args),
-        CommandKind::Start(args) => start_vm(&data_dir, &args.name, false, args.graphics),
-        CommandKind::Install(args) => start_vm(&data_dir, &args.name, true, args.graphics),
+        CommandKind::Start(args) => launch_vm_detached(&data_dir, &args.name, false, args.graphics),
+        CommandKind::Install(args) => {
+            launch_vm_detached(&data_dir, &args.name, true, args.graphics)
+        }
+        CommandKind::RunInternal(args) => run_internal(&data_dir, args),
         CommandKind::Connect(args) => connect_vm(&data_dir, &args.name),
         CommandKind::Stop(args) => stop_vm(&data_dir, &args.name),
         CommandKind::Delete(args) => delete_vm(&data_dir, &args.name),
@@ -493,7 +511,7 @@ fn create_vm(data_dir: &Path, args: CreateArgs) -> Result<()> {
         "qemu-img could not create the VM disk",
     )?;
 
-    let (ovmf_code, ovmf_vars_template) = find_ovmf()?;
+    let (_ovmf_code, ovmf_vars_template) = find_ovmf()?;
     let uefi_vars = vm_dir.join("OVMF_VARS.fd");
     fs::copy(&ovmf_vars_template, &uefi_vars)?;
 
@@ -517,10 +535,11 @@ fn create_vm(data_dir: &Path, args: CreateArgs) -> Result<()> {
 
     println!("Created VM: {}", vm_dir.display());
     println!("Booting the {} installer …", config.distro.display_name());
-    let result = run_qemu(&config, &ovmf_code, true, None);
+    let result = launch_vm_detached(data_dir, &config.name, true, None);
 
-    if config.temporary {
-        println!("Temporary VM: removing VM state …");
+    if result.is_err() && config.temporary {
+        // If the detached supervisor failed to start, there is no process left
+        // to perform the normal temporary-VM cleanup.
         let _ = fs::remove_dir_all(&vm_dir);
     }
 
@@ -804,7 +823,124 @@ fn download_and_verify(image: &OsImage, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn start_vm(
+/// Start a hidden supervisor in its own session, so the VM and its virtiofsd
+/// processes survive closing the terminal that invoked `vmforge start`.
+fn launch_vm_detached(
+    data_dir: &Path,
+    name: &str,
+    installer: bool,
+    graphics_override: Option<GraphicsMode>,
+) -> Result<()> {
+    let config = load_config(data_dir, name)?;
+    let vm_dir = config_dir(&config)?;
+    fs::create_dir_all(&vm_dir)?;
+    if is_running(&vm_dir)? {
+        return Err(AppError::Message(format!("VM `{name}` is already running")));
+    }
+
+    let ready_path = vm_dir.join("vmforge.ready");
+    let _ = fs::remove_file(&ready_path);
+    let log_path = vm_dir.join("vmforge.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&log_path)?;
+    let log_err = log.try_clone()?;
+    let executable = std::env::current_exe()
+        .map_err(|e| AppError::Message(format!("cannot locate the vmforge executable: {e}")))?;
+
+    let mut command = Command::new(executable);
+    command
+        .arg("--data-dir")
+        .arg(data_dir)
+        .arg("__run")
+        .arg(name);
+    if installer {
+        command.arg("--installer");
+    }
+    if let Some(mode) = graphics_override {
+        command.arg("--graphics").arg(match mode {
+            GraphicsMode::Venus => "venus",
+            GraphicsMode::Safe => "safe",
+        });
+    }
+
+    // Separate session + redirected descriptors: closing the terminal won't
+    // send a hangup to the supervisor, QEMU, virtiofsd, or the viewer.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut supervisor = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err))
+        .spawn()
+        .map_err(|e| AppError::Message(format!("could not launch VM supervisor: {e}")))?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    loop {
+        if let Some(status) = supervisor.try_wait()? {
+            let details = fs::read_to_string(&log_path).unwrap_or_default();
+            return Err(AppError::Message(format!(
+                "VM supervisor exited before the VM became ready ({status}). Log: {}\n{}",
+                log_path.display(),
+                tail_text(&details, 25)
+            )));
+        }
+
+        let pid_path = vm_dir.join("qemu.pid");
+        if let Ok(pid_text) = fs::read_to_string(&pid_path) {
+            if let Ok(pid) = pid_text.trim().parse::<i32>() {
+                if is_pid_alive(pid) && ready_path.exists() {
+                    println!("VM `{name}` is running in the background (QEMU PID {pid}).");
+                    println!("You can close this terminal. Log: {}", log_path.display());
+                    return Ok(());
+                }
+            }
+        }
+
+        if std::time::Instant::now() >= deadline {
+            // Stop QEMU first where possible. Its supervisor then gets to run
+            // the normal virtiofsd/socket cleanup path instead of being killed
+            // out from under its children.
+            let qemu_pid = fs::read_to_string(vm_dir.join("qemu.pid"))
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok());
+            if let Some(pid) = qemu_pid.filter(|pid| is_pid_alive(*pid)) {
+                let _ = unsafe { libc::kill(pid, libc::SIGTERM) };
+            } else {
+                let _ = unsafe { libc::kill(supervisor.id() as i32, libc::SIGTERM) };
+            }
+            let details = fs::read_to_string(&log_path).unwrap_or_default();
+            return Err(AppError::Message(format!(
+                "VM did not become ready within 25 seconds. Log: {}\n{}",
+                log_path.display(),
+                tail_text(&details, 25)
+            )));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn run_internal(data_dir: &Path, args: InternalRunArgs) -> Result<()> {
+    let config = load_config(data_dir, &args.name)?;
+    let vm_dir = config_dir(&config)?;
+    let result = run_vm_foreground(data_dir, &args.name, args.installer, args.graphics);
+    if config.temporary {
+        // The supervisor remains alive until QEMU exits, then removes the
+        // entire temporary VM directory and all associated state.
+        let _ = fs::remove_dir_all(&vm_dir);
+    }
+    result
+}
+
+fn run_vm_foreground(
     data_dir: &Path,
     name: &str,
     installer: bool,
@@ -851,6 +987,8 @@ fn run_qemu(
     let _ = fs::remove_file(&qga_socket);
     let vnc_port_file = vm_dir.join("vnc.port");
     let _ = fs::remove_file(&vnc_port_file);
+    let ready_file = vm_dir.join("vmforge.ready");
+    let _ = fs::remove_file(&ready_file);
     let vnc_port = find_free_tcp_port(5900, 100)?;
     fs::write(&vnc_port_file, format!("{vnc_port}\n"))?;
 
@@ -1036,6 +1174,9 @@ fn run_qemu(
             let _ = qemu.kill();
             AppError::Message(format!("vncviewer could not be started: {e}"))
         })?;
+    // Signal the launcher only after QEMU's VNC listener is responsive and
+    // the viewer process has been created. No TCP probe client is needed.
+    fs::write(&ready_file, format!("{}\n", std::process::id()))?;
 
     if !installer && !config.shares.is_empty() {
         match wait_for_qga_and_mount_shares(&qga_socket, &config.shares, Duration::from_secs(60)) {
@@ -1060,6 +1201,7 @@ fn run_qemu(
     }
     let _ = fs::remove_file(&qga_socket);
     let _ = fs::remove_file(&vnc_port_file);
+    let _ = fs::remove_file(&ready_file);
 
     let status = qemu_status.map_err(|e| AppError::Message(format!("QEMU wait failed: {e}")))?;
     if !status.success() {
@@ -1420,6 +1562,12 @@ fn connect_vm(data_dir: &Path, name: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn tail_text(text: &str, max_lines: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
 }
 
 fn command_exists(name: &str) -> bool {

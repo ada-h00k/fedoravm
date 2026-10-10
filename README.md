@@ -142,6 +142,8 @@ sudo mount -t virtiofs share0 /mnt/host-documents
 
 The VM must be stopped while changing its persistent share configuration.
 
+`vmforge` starts a detached supervisor for each VM. It keeps QEMU and every `virtiofsd` process alive after the original terminal closes, launches the VNC viewer, and performs socket cleanup when the VM stops. The supervisor writes QEMU and VM diagnostics to `~/.local/share/vmforge/NAME/vmforge.log` (or the configured data directory). `vmforge start NAME` returns once QEMU's VNC endpoint is ready.
+
 `vmforge` starts one `virtiofsd` process per share and waits until the Unix socket is actually accepting connections before starting QEMU. If a share backend fails, its diagnostic log is written to the VM state directory as `virtiofs-N.log`.
 
 For normal VM boots, `vmforge` automatically mounts configured shares through the QEMU Guest Agent under `/mnt/vmforge/share0`, `/mnt/vmforge/share1`, and so on.
@@ -220,7 +222,8 @@ The normal installer path intentionally disables 3D acceleration for maximum com
 
 ```text
 vmforge create NAME [options]
-vmforge start NAME [--graphics venus|safe]
+vmforge start NAME [--graphics venus|safe]  # starts in background
+vmforge install NAME [--graphics venus|safe] # installer also runs in background
 vmforge install NAME [--graphics venus|safe]
 vmforge connect NAME
 vmforge stop NAME
@@ -321,16 +324,22 @@ com.redhat.spice.0
 
 The name comes from the spice-vdagent protocol; **no `spicevmc` backend and no SPICE server are used**.
 
-`vmforge start NAME` starts QEMU with Venus plus a localhost-only VNC server and opens `vncviewer`. To open another viewer for an already running VM:
+`vmforge start NAME` starts QEMU with Venus plus a localhost-only VNC server and opens `vncviewer` in the background supervisor. The command returns after the VM is ready; it is safe to close the terminal. Diagnostics are written to `~/.local/share/vmforge/NAME/vmforge.log`. To open another viewer for an already running VM:
 
 ```bash
 vmforge connect NAME
 ```
 
-Closing the viewer does not stop the VM. Stop it with:
+Closing the viewer does not stop the VM, and closing the terminal does not stop either the VM or its virtiofs shares. Stop the VM with:
 
 ```bash
 vmforge stop NAME
+```
+
+To inspect startup/runtime errors:
+
+```bash
+tail -f ~/.local/share/vmforge/NAME/vmforge.log
 ```
 
 ### Venus graphics and display architecture
